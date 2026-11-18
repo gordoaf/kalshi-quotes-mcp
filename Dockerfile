@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 LABEL org.opencontainers.image.title="Kalshi Quotes MCP" \
       org.opencontainers.image.source="https://github.com/gordoaf/kalshi-quotes-mcp" \
