@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked --group dev
+      - name: Lint
+        run: uv run ruff check .
+      - name: Check formatting
+        run: uv run ruff format --check .
+      - name: Test
+        run: uv run pytest -q
+      - name: Build distributions
+        run: uv build
+      - name: Verify packaged entrypoint
+        run: uv run --isolated --no-project --with ./dist/kalshi_quotes_mcp-0.1.0-py3-none-any.whl kalshi-quotes-mcp --version
+
+  container:
+    name: Docker build and startup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: docker build -t kalshi-quotes-mcp .
+      - run: docker run --rm kalshi-quotes-mcp --version
+      - name: Verify HTTP endpoint
+        shell: bash
+        run: |
+          docker run -d --name quotes -p 127.0.0.1:8000:8000 kalshi-quotes-mcp
+          trap 'docker logs quotes; docker rm -f quotes' EXIT
+          for i in {1..30}; do
+            if curl -fsS -X POST http://127.0.0.1:8000/mcp \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' > response.json; then
+              python -c 'import json; assert json.load(open("response.json"))["result"]["serverInfo"]["name"] == "Kalshi Quotes"'
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
